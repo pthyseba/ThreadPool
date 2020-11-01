@@ -159,50 +159,43 @@ class ConfigurableThreadPool
 	  l.unlock();
 	  if (w != nullptr)
 	  {
-	    try
-	    { 
-	      // Enable longjmp from timer signal handler to interrupt  
-	      if (setjmp(iEnv[aThreadId]) == 0)	    
+	    // Enable longjmp from timer signal handler to interrupt 
+	    if (setjmp(iEnv[aThreadId]) == 0)
+	    {
+	      const int timeoutMilliseconds = w->GetTimeoutInMilliseconds();
+              // Setup one-shot execution timer
+	      if (timeoutEnabled && (timeoutMilliseconds > 0))
 	      {
-		const int timeoutMilliseconds = w->GetTimeoutInMilliseconds();      
-                // Setup one-shot execution timer
-		if (timeoutEnabled && (timeoutMilliseconds > 0))
-		{
-                  timerConfig.it_interval.tv_sec = 0;
-		  timerConfig.it_interval.tv_nsec = 0;
-	    	  timerConfig.it_value.tv_sec = timeoutMilliseconds / 1000;
-	          timerConfig.it_value.tv_nsec = (timeoutMilliseconds % 1000) * 1000000;	
-		  timer_settime(timerId, 0, &timerConfig, nullptr);
-	        }
-
-		// Actual work
-		// NOTE: if timeout is enabled, do NOT allocate resources in operator()!
-		w->Call();
-                
-		// Disable timer
-		if (timeoutEnabled)
-		{
-		  timerConfig.it_value.tv_sec = 0;
-		  timerConfig.it_value.tv_nsec = 0;
-                  timer_settime(timerId, 0, &timerConfig, nullptr);
-		}
+		timerConfig.it_interval.tv_sec = 0;
+		timerConfig.it_interval.tv_nsec = 0;
+		timerConfig.it_value.tv_sec = timeoutMilliseconds / 1000;
+	        timerConfig.it_value.tv_nsec = (timeoutMilliseconds % 1000) * 1000000;
+		timer_settime(timerId, 0, &timerConfig, nullptr);
 	      }
-	      else
-	      { 
-		// Timer fired during w->Call(), signal handler longjmp brings us back here
-		std::cout << "Thread " << GetThreadId() << ": TIMEOUT" << std::endl;
+
+	      // Actual work
+	      // NOTE: if timeout is enabled, do NOT allocate resources in operator()!
+	      try
+	      {
+	        w->Call();
+	      }
+              catch(...)
+	      {
+                std::cout << "Thread " << GetThreadId() << ": exception thrown from w->Call()..." << std::endl;
+	      }
+
+	      // Disable timer
+	      if (timeoutEnabled)
+	      {
+	        timerConfig.it_value.tv_sec = 0;
+		timerConfig.it_value.tv_nsec = 0;
+		timer_settime(timerId, 0, &timerConfig, nullptr);
 	      }
 	    }
-	    catch(...)
-	    { 
-	       // Exeception thrown from w->Call(), disable timer
-	       if (timeoutEnabled)
-	       {
-	          timerConfig.it_value.tv_sec = 0;
-	          timerConfig.it_value.tv_nsec = 0;
-	          timer_settime(timerId, 0, &timerConfig, nullptr);
-	       }
-	       std::cout << "Thread " << GetThreadId() << ": exception thrown from w->Call()..." << std::endl;
+	    else
+	    {
+	      // Timer fired during w->Call(), signal handler longjmp brings us back here
+	      std::cout << "Thread " << GetThreadId() << ": TIMEOUT" << std::endl;
 	    }
 
 	    delete w;
