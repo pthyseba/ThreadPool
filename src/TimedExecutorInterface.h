@@ -1,6 +1,7 @@
 #ifndef TIMEDEXECUTORINTERFACE_H
 #define TIMEDEXECUTORINTERFACE_H
 
+#include <atomic>
 #include <functional>
 
 class TimedExecutorInterface
@@ -12,7 +13,8 @@ class TimedExecutorInterface
     struct TimeoutException {}; 
     typedef std::function<void()> TCallable;
 
-    virtual void ExecuteWithTimeout(TCallable&& aCallable, int aMilliseconds) = 0; 
+    virtual void TryCancel(int aItem) = 0;
+    virtual void ExecuteWithTimeout(TCallable&& aCallable, int aMilliseconds, int aItem) = 0; 
 };
 
 

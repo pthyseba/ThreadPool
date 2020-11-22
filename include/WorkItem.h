@@ -9,8 +9,8 @@ class WorkItem
     virtual void Call() const = 0;
     virtual ~WorkItem() = default;
 
-    WorkItem(int aExecutionTimeout, std::string aId) 
-      : iExecutionTimeout(aExecutionTimeout), iId(std::move(aId))						            
+    WorkItem(int aExecutionTimeout, int aId) 
+      : iExecutionTimeout(aExecutionTimeout), iId(aId)						            
     {}
 
     int GetTimeoutInMilliseconds() const
@@ -18,21 +18,21 @@ class WorkItem
       return iExecutionTimeout;
     }
 
-    std::string GetId() const
+    int GetId() const
     {
       return iId;
     }
 
   private:
     int iExecutionTimeout;
-    std::string iId;
+    int iId;
 };
 
 template<typename taCallable>
 class CallableWorkItem : public WorkItem
 {
   public:
-    CallableWorkItem(taCallable&& aCallable, int aExecutionTimeout, std::string aId = std::string(""))
+    CallableWorkItem(taCallable&& aCallable, int aExecutionTimeout, int aId = 0)
       : WorkItem(aExecutionTimeout, aId), iCallable(std::forward<taCallable>(aCallable))
     {}
 

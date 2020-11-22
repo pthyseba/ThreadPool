@@ -18,15 +18,18 @@ class A
 
 int main(int argc, char** argv)
 {
-  ThreadPool::ThreadPool t(4);//, t2(10);
-  t.Push([](){throw "test exception";}, 1000, "exception");
-  t.Push([](){ return 2; }, 0, "SimpleReturn");
-  t.Push([](){ int i =0; for(;;) i++; }, 2000, "LoopTest");
-  t.Push([](){ int i =0; for(;;) i++; }, 2500, "LoopTest2");
-  t.Push([](){ volatile int i =0; while(i < 1000000) i++; }, 0, "LoopTest3");
-  t.Push(A(), 3000, "t.A()");
+  ThreadPool::ThreadPool t(1);//, t2(10);
+  t.Push([](){throw "test exception";}, 1000, 0);
+  t.Push([](){ return 2; }, 0, 1);
+  t.Push([](){ int i =0; for(;;) i++; }, 2000, 2);
+  t.Push([](){ int i =0; for(;;) i++; }, 2500, 3);
+  t.Push([](){ volatile int i =0; while(i < 1000000) i++; }, 0, 4);
+  t.Push(A(), 0000, 5);
 
-  usleep(5000000);
+  usleep(10000000);
+  t.TryCancel(5);
+
+  usleep(2000000);
   t.Stop();
   return 0;
 }
