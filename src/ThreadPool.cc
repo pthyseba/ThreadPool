@@ -63,6 +63,18 @@ void ThreadPool::Stop()
   iExit = true;
   l.unlock();
   iQueueCv.notify_all();
+  // Try to cancel ongoing work
+  for (int i = 0; i < iCurrentWorkItems.size(); ++i)
+  {
+    int aWorkItem = iCurrentWorkItems[i]->load();	  
+    if (aWorkItem != -1)
+    {
+      if (iTimedExecutors[i]->load() != nullptr)
+      {
+        iTimedExecutors[i]->load()->TryCancel(aWorkItem);
+      }
+    }
+  }
 }
 
 
@@ -72,7 +84,9 @@ void ThreadPool::TryCancel(int aId)
   std::unique_lock<std::mutex> l(iQueueMutex);
   // if aId is still in Queue
   // .. remove (need vector?)
-  
+ 
+  // Item is done or being processed
+  l.unlock(); 
   for (size_t i = 0; i < iCurrentWorkItems.size(); ++i)
   {
     if (iCurrentWorkItems[i]->load() == aId)
