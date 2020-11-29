@@ -65,14 +65,11 @@ class Win32TimedExecutor : public TimedExecutorInterface
         }
         else
         {
+	  // Either timed out or RetyCancel called.
+	  // Try to disable timer anyway in catch block.
 	  iInterruptible.store(false);
           throw TimeoutException();
         }
-      }
-      catch(const TimeoutException& e)
-      {
-	iCurrentWorkItem->store(-1);
-        throw;
       }
       catch(...)
       {
