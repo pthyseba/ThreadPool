@@ -38,23 +38,12 @@ class PosixTimedExecutor : public TimedExecutorInterface
     {
       // pthread_sigqueue not supported on Ubuntu on WSL v1
       // Alternative implementation: use dedicated timer for TryCancel operation
+      // The other alternative (calling SetTimer(1) here) does not guarantee 
+      // the relevant item is cancelled
       iAbortData.iExpectedWorkItem = aId;      
       sigval v;
       v.sival_ptr = &iAbortData;
       int result = pthread_sigqueue(iPthread_t, iSignalNo, v);
-      /*
-      switch (result)
-      {
-        case EAGAIN:
-		break;
-	case EINVAL:
-		break;
-	case ESRCH:
-		break;
-      }
-      
-      StartTimer(1);  	    
-      */
     }
 
     virtual void ExecuteWithTimeout(TCallable&& aCallable,  int aMilliseconds, int aWorkItem) override
@@ -220,7 +209,7 @@ class PosixTimedExecutor : public TimedExecutorInterface
         sa.sa_sigaction = &Handler;
         sigaction(taSignalNo, &sa, nullptr);
       }
-    };
+    }
 
     pid_t iThreadId;
     pthread_t iPthread_t;
