@@ -18,11 +18,15 @@ namespace ThreadPool {
 
 ThreadPool::ThreadPool(size_t aThreadCount): iExit(false)
 {	    
+  iNextWorkItemId = 0;
   // Launch worker threads
   iThreads.reserve(aThreadCount);	
+  iCurrentWorkItems.reserve(aThreadCount);
   for(size_t i = 0; i < aThreadCount; ++i)
   {
-    iThreads.emplace_back([this, i](){this->workerMain(i);});
+    iCurrentWorkItems.push_back(new std::atomic<int>(-1));
+    iTimedExecutors.push_back(new std::atomic<TimedExecutorInterface*>(nullptr));
+    iThreads.emplace_back([this, i](){this->workerMain(i, iCurrentWorkItems[i], iTimedExecutors[i]);});
   }
 }
 
@@ -41,6 +45,16 @@ ThreadPool::~ThreadPool()
     iWorkQueue.pop();
     delete w;
   }
+
+  for(size_t i = 0; i < iCurrentWorkItems.size(); ++i)
+  {
+    delete iCurrentWorkItems[i];
+  }
+
+  for(size_t i = 0; i < iTimedExecutors.size(); ++i)
+  {
+    delete iTimedExecutors[i];
+  }
 }
 
 void ThreadPool::Stop()
@@ -49,15 +63,53 @@ void ThreadPool::Stop()
   iExit = true;
   l.unlock();
   iQueueCv.notify_all();
+  // Try to cancel ongoing work
+  for (int i = 0; i < iCurrentWorkItems.size(); ++i)
+  {
+    int aWorkItem = iCurrentWorkItems[i]->load();	  
+    if (aWorkItem != -1)
+    {
+      if (iTimedExecutors[i]->load() != nullptr)
+      {
+        iTimedExecutors[i]->load()->TryCancel(aWorkItem);
+      }
+    }
+  }
 }
 
-void ThreadPool::workerMain(size_t aThreadId)
+
+void ThreadPool::TryCancel(int aId)
+{
+  // Prevent workers from taking up new work	
+  std::unique_lock<std::mutex> l(iQueueMutex);
+  // if aId is still in Queue
+  // .. remove (need vector?)
+ 
+  // Item is done or being processed
+  l.unlock(); 
+  for (size_t i = 0; i < iCurrentWorkItems.size(); ++i)
+  {
+    if (iCurrentWorkItems[i]->load() == aId)
+    {
+      // Try to cancel running job
+      // Need pointer to Thread-specific TimedExecutor
+      if (iTimedExecutors[i]->load() != nullptr)
+      {
+        iTimedExecutors[i]->load()->TryCancel(aId);
+      }
+      return;
+    }
+  }
+}
+
+void ThreadPool::workerMain(size_t aThreadId, std::atomic<int>* aCurrentWorkItem, std::atomic<TimedExecutorInterface*>* aTimedExecutor)
 {
   static auto console = spdlog::stdout_color_mt("console");
   try
   {
     // Create timer used by this thread
-    TimedExecutor t; 
+    TimedExecutor t(aCurrentWorkItem); 
+    aTimedExecutor->store(&t); 
     // Thread main loop
     for(;;) 
     { 
@@ -80,7 +132,7 @@ void ThreadPool::workerMain(size_t aThreadId)
       {	
         try
         {	    
-          t.ExecuteWithTimeout([w](){w->Call();}, w->GetTimeoutInMilliseconds());
+          t.ExecuteWithTimeout([w](){w->Call();}, w->GetTimeoutInMilliseconds(), w->GetId());
           console->info("Thread {}: FINISHED {}", aThreadId, w->GetId());
 	}
         catch (const TimedExecutorInterface::TimeoutException& e)

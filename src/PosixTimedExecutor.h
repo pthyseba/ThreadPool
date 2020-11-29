@@ -19,8 +19,11 @@ class PosixTimedExecutor : public TimedExecutorInterface
 {
   public:
     
-    PosixTimedExecutor() : iSignalNo(taSignalNo)
+    PosixTimedExecutor(std::atomic<int>* aWorkItem) 
+      : TimedExecutorInterface(aWorkItem), iSignalNo(taSignalNo), iInterruptible(false),
+        iThreadId(GetThreadId()), iPthread_t(pthread_self())
     {
+      SetupInterruptData();
       SetupHandler();
       CreateTimer();
     }
@@ -30,50 +33,65 @@ class PosixTimedExecutor : public TimedExecutorInterface
       DeleteTimer();
     }
  
-    virtual void ExecuteWithTimeout(TCallable&& aCallable, int aMilliseconds) override
+    // Only function to be called from outside a ThreadPool worker thread
+    virtual void TryCancel(int aId) override
     {
-	if (aMilliseconds > 0)
-	{
-          if(!iTimerEnabled)
-	  {
-	    throw std::string("Timeout not enabled!");
-	  }
+      // pthread_sigqueue not supported on Ubuntu on WSL v1
+      // Alternative implementation: use dedicated timer for TryCancel operation
+      // The other alternative (calling SetTimer(1) here) does not guarantee 
+      // the relevant item is cancelled
+      iAbortData.iExpectedWorkItem = aId;      
+      sigval v;
+      v.sival_ptr = &iAbortData;
+      int result = pthread_sigqueue(iPthread_t, iSignalNo, v);
+    }
 
-	  try
-	  {
-            if (setjmp(iBuf) == 0)
-	    {		    
-              StartTimer(aMilliseconds);
-	      aCallable();
-	      StopTimer();
-	    }
-	    else // aCallable() potentially timed out
-	    {  
-              throw TimeoutException();
-	    }
-	  }
-	  catch(const TimeoutException& e)
-	  {
-	    throw;	  
-	  }
-	  catch(...)
-	  {
+    virtual void ExecuteWithTimeout(TCallable&& aCallable,  int aMilliseconds, int aWorkItem) override
+    {
+      // Note: to be interruptible, jmp_buf must be used even in absence of timeout
+      iCurrentWorkItem->store(aWorkItem);     
+      iTimerData.iExpectedWorkItem = aWorkItem;
+      bool useTimeout = iTimerEnabled && (aMilliseconds > 0);
+      try 
+      {
+        if (setjmp(iBuf) == 0)
+        {
+          iInterruptible.store(true);
+          if (useTimeout)
+          {
+            StartTimer(aMilliseconds);
+          }
+          aCallable();
+          iInterruptible.store(false);
+          iCurrentWorkItem->store(-1);
+          if (useTimeout)
+          {
             StopTimer();
-	    throw;
-	  }
-	}
-	else // no timeout
-	{ 
-          try
-	  {
-            aCallable();
-	  }
-	  catch(...)
-	  {
-            throw;
-	  }
-	}
-
+          }
+        }
+        else
+        {
+	  iInterruptible.store(false);	
+          // We got here by longjmp, meaning the signal handler did not return.
+          // As a result, the timer signal is still blocked here.	  
+          // Unblocking timer signal below.
+          sigset_t s;
+          sigemptyset(&s);
+          sigaddset(&s, iSignalNo);
+          pthread_sigmask(SIG_UNBLOCK, &s, NULL);		  
+          throw TimeoutException();
+        }
+      }
+      catch(...)
+      {
+        iInterruptible.store(false);
+        iCurrentWorkItem->store(-1);
+        if (useTimeout)
+        {  
+          StopTimer();
+        }
+        throw;
+      }
     } 
 
   private: 
@@ -81,7 +99,9 @@ class PosixTimedExecutor : public TimedExecutorInterface
     struct handlerData
     {
       int iSignalSource; // Timer vs abort 	    
-      int iWorkId; // For abort
+      int iExpectedWorkItem; // For abort
+      std::atomic<int>* iCurrentWorkItem;
+      std::atomic<bool>* iInterruptible;
       jmp_buf* iBuf;
     };
 
@@ -91,6 +111,16 @@ class PosixTimedExecutor : public TimedExecutorInterface
       return tid;
     }
 
+    void SetupInterruptData()
+    {
+      iAbortData.iBuf = &iBuf;
+      iAbortData.iInterruptible = &iInterruptible;
+      iAbortData.iCurrentWorkItem = iCurrentWorkItem;
+      iTimerData.iBuf = &iBuf;
+      iTimerData.iInterruptible = &iInterruptible;
+      iTimerData.iCurrentWorkItem = iCurrentWorkItem;
+    }
+
     void CreateTimer() 
     {
       sigevent sevp;
@@ -98,9 +128,9 @@ class PosixTimedExecutor : public TimedExecutorInterface
       sevp.sigev_signo = iSignalNo;
       // Direct signal to this thread
       sevp.sigev_notify = SIGEV_THREAD_ID;
-      sevp._sigev_un._tid = GetThreadId();
+      sevp._sigev_un._tid = iThreadId;
       // Ensure signal handler gets pointer to correct jmp_buf
-      sevp.sigev_value.sival_ptr = static_cast<void*>(&iBuf);
+      sevp.sigev_value.sival_ptr = static_cast<void*>(&iTimerData);
       iTimerEnabled = (timer_create(CLOCK_REALTIME, &sevp, &iTimerId) == 0);
     }
 
@@ -147,8 +177,21 @@ class PosixTimedExecutor : public TimedExecutorInterface
       // ASSUMPTION: this handler runs on the thread that needs to be interrupted
       if (aSignalNo == taSignalNo)
       {
-        jmp_buf* buf = static_cast<jmp_buf*>(aSigInfo->si_value.sival_ptr);
-        longjmp(*buf, 1);
+	handlerData* data = static_cast<handlerData*>(aSigInfo->si_value.sival_ptr); 
+
+	// Check interruptible status of this thread
+        if (!data->iInterruptible->load())
+	{
+          return;
+	}
+
+	// Check active work item is the expected work item
+        if (data->iExpectedWorkItem != data->iCurrentWorkItem->load())
+	{
+	  return;
+	}	
+	
+	longjmp(*(data->iBuf), 1);
       }
     }
     
@@ -166,8 +209,11 @@ class PosixTimedExecutor : public TimedExecutorInterface
         sa.sa_sigaction = &Handler;
         sigaction(taSignalNo, &sa, nullptr);
       }
-    };
+    }
 
+    pid_t iThreadId;
+    pthread_t iPthread_t;
+    std::atomic<bool> iInterruptible;
     bool iTimerEnabled;
     int iSignalNo;
     timer_t iTimerId;
