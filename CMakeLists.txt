@@ -31,7 +31,7 @@ add_executable(ThreadPoolTest ThreadPoolTest.cc)
 target_include_directories(ThreadPoolTest PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(ThreadPoolTest PRIVATE ThreadPool)
 
-if (WIN32)
+if (WIN32 AND (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "__x86-64__"))
 option(MINGW_STDTHREADS_GENERATE_STDHEADERS "" ON)
 add_subdirectory(mingw-std-threads)
 target_link_libraries(ThreadPool PRIVATE mingw_stdthreads)

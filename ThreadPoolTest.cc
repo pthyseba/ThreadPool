@@ -1,6 +1,7 @@
 #include "ThreadPool.h"
 
 #ifdef _WIN32
+#include <synchapi.h>
 #define usleep(a) Sleep(a/1000)
 #else
 #include "unistd.h"

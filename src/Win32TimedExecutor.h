@@ -48,8 +48,12 @@ class Win32TimedExecutor : public TimedExecutorInterface
         iCurrentWorkItem->store(aItem);
 	iTimerData.iExpectedWorkItem = aItem;
 	// http://www.agardner.me/golang/windows/cgo/64-bit/setjmp/longjmp/2016/02/29/go-windows-setjmp-x86.html
-        if (__builtin_setjmp(iBuf) == 0) 
-        {
+#ifdef __aarch64__
+        if (setjmp(iBuf) == 0)  
+#else 
+	if (__builtin_setjmp(iBuf) == 0) 
+#endif
+	{
 	  iInterruptible.store(true);
           if (aMilliseconds > 0)
 	  {
@@ -132,8 +136,12 @@ class Win32TimedExecutor : public TimedExecutorInterface
         if (GetThreadContext(hThread, &ctx))
         {
           // Jump into our TimeoutReturn() function
-          ctx.Rip = (DWORD) (DWORD_PTR) returnFunc;
-          SetThreadContext(hThread, &ctx);
+#ifdef __aarch64__
+          ctx.Lr = (DWORD) (DWORD_PTR) returnFunc;
+#else
+	  ctx.Rip = (DWORD) (DWORD_PTR) returnFunc;
+#endif
+	  SetThreadContext(hThread, &ctx);
         }
         // go ahead
         ResumeThread(hThread);
@@ -157,7 +165,11 @@ class Win32TimedExecutor : public TimedExecutorInterface
        }
        else
        {
+#ifdef __aarch64__
+          longjmp(*(data->iBuf), 1);
+#else
 	  __builtin_longjmp(*(data->iBuf), 1);
+#endif
        }      
     }
 
@@ -171,7 +183,11 @@ class Win32TimedExecutor : public TimedExecutorInterface
       }
       else
       {
+#ifdef __aarch64__
+          longjmp(*(data->iBuf), 1);
+#else
         __builtin_longjmp(*(data->iBuf), 1);
+#endif
       }
     }
 
